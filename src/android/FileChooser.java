@@ -13,8 +13,10 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.util.Log;
 
 import org.apache.cordova.CallbackContext;
@@ -63,23 +65,52 @@ public class FileChooser extends CordovaPlugin {
                         JSONObject obj = new JSONObject();
                         try {
                             File f = FileUtils.getFile(this.cordova.getActivity(), uri);
-                            if (f == null) {
-                                this.callbackContext.error("Selected file must be on local drive");
-                            } else {
+                            if (f != null) {
                                 final String url = f.toURI().toURL().toString();
                                 Log.i(TAG, "URL: " + url);
                                 obj.put("url", url);
-                                this.callbackContext.success(obj);
+                                obj.put("name", f.getName());
+                            } else {
+                                // Android 10+ scoped storage 不允许查询 _data 列，直接返回 content URI
+                                // JS 层的 window.resolveLocalFileSystemURL 可以处理 content:// URI
+                                Log.i(TAG, "Fallback to content URI: " + uri);
+                                obj.put("url", uri.toString());
+                                obj.put("name", getDisplayName(uri));
                             }
+                            this.callbackContext.success(obj);
                         } catch (Exception e) {
-                            Log.e(TAG, "File select error", e);
-                            this.callbackContext.error(e.getMessage());
+                            // 路径解析失败时同样 fallback 到 content URI
+                            Log.e(TAG, "File select error, fallback to content URI", e);
+                            try {
+                                obj.put("url", uri.toString());
+                                obj.put("name", getDisplayName(uri));
+                                this.callbackContext.success(obj);
+                            } catch (Exception je) {
+                                this.callbackContext.error(je.getMessage());
+                            }
                         }
                     }
                 } else {
                     this.callbackContext.error("No file selected");
                 }
         }
+    }
+
+    /** 通过 ContentResolver 查询文件显示名，供 Android 10+ content URI 使用 */
+    private String getDisplayName(Uri uri) {
+        Cursor cursor = null;
+        try {
+            cursor = this.cordova.getActivity().getContentResolver().query(
+                uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                return cursor.getString(0);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error querying display name", e);
+        } finally {
+            if (cursor != null) cursor.close();
+        }
+        return uri.getLastPathSegment();
     }
 
     @Override
